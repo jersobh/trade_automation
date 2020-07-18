@@ -1,10 +1,10 @@
 //+------------------------------------------------------------------+
 //|                                                      Maguila.mq5 |
-//|                        Copyright 2020, MetaQuotes Software Corp. |
-//|                                             https://www.mql5.com |
+//|                            Copyright 2020, Camilo Dias da Silva. |
+//|                                  https://github.com/camilodsilva |
 //+------------------------------------------------------------------+
-#property copyright "Copyright 2020, MetaQuotes Software Corp."
-#property link      "https://www.mql5.com"
+#property copyright "Camilo Dias da Silva"
+#property link      "https://github.com/camilodsilvam"
 #property version   "1.00"
 #include <Trade\Trade.mqh>
 #include <Tools\DateTime.mqh>
