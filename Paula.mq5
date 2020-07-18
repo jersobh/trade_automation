@@ -1,6 +1,6 @@
 //+------------------------------------------------------------------+
-//|                                               BollingerBands.mq5 |
-//|                        Copyright 2020, MetaQuotes Software Corp. |
+//|                                                        Paula.mq5 |
+//|                            Copyright 2020, Camilo Dias da Silva. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2020, MetaQuotes Software Corp."
