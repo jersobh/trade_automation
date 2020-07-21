@@ -4,38 +4,56 @@
 //|                                  https://github.com/camilodsilva |
 //+------------------------------------------------------------------+
 #property copyright "Camilo Dias da Silva"
-#property link      "https://github.com/camilodsilvam"
+#property link      "https://github.com/camilodsilva"
 #property version   "1.00"
 #include <Trade\Trade.mqh>
 #include <Tools\DateTime.mqh>
+#include "../../Libraries/TradeUtils.mq5";
 
 CTrade trade;
 
-input int stop_rating               = 150;
-input int profit_rating             = 180;
-input int loss_limit                = 3;
-input int contracts                 = 1;
-input int ema1                      = 21;
-input int ema2                      = 42;
-static int position                 = -1;
-static int last_position            = position;
-static datetime last_check          = TimeCurrent();
-static bool candle_touched          = false;
-static const string  BUY_COMMENT    = "[MAGUILA] BUY";
-static const string  SELL_COMMENT   = "[MAGUILA] SELL";
-static const int     TRADE_DELAY    = 900;
+// inputs
+input int stop_rating = 150;
+input int profit_rating = 180;
+input int loss_limit = 3;
+input int contracts = 1;
+input int ema1 = 21;
+input int ema2 = 42;
+input string stop_time = "17:30:00";
+
+// configuration and controllers
+static int position = -1;
+static int last_position = position;
+static int total_loss = 0;
+static bool candle_touched = false;
+static datetime last_check = TimeCurrent();
+static const string COMMENT = "[MAGUILA]";
 
 //+------------------------------------------------------------------+
 //|                                                                  |
 //+------------------------------------------------------------------+
 void OnTick()
   {
-//---
    MqlRates current_price[];
    GetPrices(current_price, 10);
 
-   if(StopLimitReached())
+   bool stop_limit_reached = LossLimitReached();
+   bool stop_time_reached = StopTimeReached(stop_time);
+
+   Comment("** - EA - MAGUILA **\n",
+           "\n| STOP LIMIT : ", stop_limit_reached,
+           "\n| STOP TIME  : ", stop_time_reached);
+
+   if(stop_limit_reached || stop_time_reached)
+     {
+      if(PositionsTotal() > 0)
+        {
+         double current_close_price = current_price[0].close;
+
+         ClosePositions(current_close_price, contracts, COMMENT);
+        }
       return;
+     }
 
    const double ask = NormalizeDouble(SymbolInfoDouble(_Symbol,SYMBOL_ASK),_Digits);
    const double bid = NormalizeDouble(SymbolInfoDouble(_Symbol, SYMBOL_BID), _Digits);
@@ -46,7 +64,7 @@ void OnTick()
 
       if(position != -1)
         {
-         if(WaitNextCandle(current_price))
+         if(WaitNextTime(current_price[0].time, last_check))
            {
             position = -1;
             return;
@@ -58,25 +76,26 @@ void OnTick()
          const double take_sell  = (bid-profit_rating*_Point);
 
          if(position == 1)
-            trade.Buy(contracts,NULL,ask,stop_buy,take_buy,"[MAGUILA] BUY");
+            trade.Buy(contracts,NULL,ask,stop_buy,take_buy,COMMENT);
 
          if(position == 0)
-            trade.Sell(contracts,NULL, bid,stop_sell,take_sell,"[MAGUILA] SELL");
+            trade.Sell(contracts,NULL, bid,stop_sell,take_sell,COMMENT);
 
-         SetNextTime(current_price);
+         SetNextTime(current_price[0].time, last_check, 900);
          last_position = position;
          position = -1;
         }
      }
    else
      {
-      PutLossAtEntracePrice();
-      
+      // PlaceLossAtEntracePrice();
       if(CheckClosePosition(current_price))
         {
-         if(HasOpenedOrders())
+         if(HasOpenedOrders(COMMENT))
            {
-            ClosePositions();
+            double current_close_price = current_price[0].close;
+
+            ClosePositions(current_close_price, contracts, COMMENT);
             last_position = -1;
             position = -1;
            }
@@ -91,84 +110,52 @@ void GetPrices(MqlRates &price_info[], int range)
   }
 
 //+------------------------------------------------------------------+
-//|                                                                  |
-//+------------------------------------------------------------------+
-bool WaitNextCandle(MqlRates &price_info[])
-  {
-   datetime current  =price_info[0].time;
-
-   if(current > last_check)
-     {
-      last_check = current;
-      return false;
-     }
-
-   return true;
-  }
-//+------------------------------------------------------------------+
-//|                                                                  |
-//+------------------------------------------------------------------+
-bool IsGap(MqlRates &price_info[])
-  {
-   double open_current_price     = NormalizeDouble(price_info[0].open,_Digits);
-   double close_previous_price   = NormalizeDouble(price_info[1].close,_Digits);
-   double points_difference      = NormalizeDouble(MathAbs(close_previous_price-open_current_price)/_Point,_Digits);
-
-   if(points_difference >= 250)
-     {
-      SetNextTime(price_info);
-      return true;
-     }
-
-   return false;
-  }
-//+------------------------------------------------------------------+
-void SetNextTime(MqlRates &price_info[])
-  {
-   last_check = price_info[0].time + 900;
-  }
-//+------------------------------------------------------------------+
 void CheckEntry(MqlRates &price_info[])
   {
-   if(!IsGap(price_info))
+   double open_price = price_info[0].open;
+   double close_price = price_info[1].close;
+   bool is_gap = IsGap(open_price, close_price);
+
+   if(is_gap)
      {
-      double ema21_array[];
-      double ema42_array[];
-      double md_array[];
-
-      ArraySetAsSeries(ema21_array,true);
-      ArraySetAsSeries(ema42_array,true);
-      ArraySetAsSeries(md_array,true);
-
-      int ema21_definition=iMA(_Symbol,_Period,ema1,0,MODE_EMA,PRICE_CLOSE);
-      int ema42_definition=iMA(_Symbol,_Period,ema2,0,MODE_EMA,PRICE_CLOSE);
-      int md_definition=iCustom(_Symbol,_Period,"Market\\McGinley_Dynamic",20);
-
-      CopyBuffer(ema21_definition,0,0,1,ema21_array);
-      CopyBuffer(ema42_definition,0,0,1,ema42_array);
-      CopyBuffer(md_definition,0,0,1,md_array);
-
-      double ema21_value=NormalizeDouble(ema21_array[0],_Digits);
-      double ema42_value=NormalizeDouble(ema42_array[0],_Digits);
-      double md_value=NormalizeDouble(md_array[0],_Digits);
-
-      // -- sell analysis
-      bool sell_signal0 = SellSignal(price_info, 0, ema21_value, ema42_value, md_value);
-      bool sell_signal1 = SellSignal(price_info, 1, ema21_value, ema42_value, md_value);
-
-      if(sell_signal0 && !sell_signal1)
-         position = 0;
-
-      // -- buy analysis
-      bool buy_signal0 = BuySignal(price_info, 0, ema21_value, ema42_value, md_value);
-      bool buy_signal1 = BuySignal(price_info, 1, ema21_value, ema42_value, md_value);
-
-      if(buy_signal0 && !buy_signal1)
-         position = 1;
+      SetNextTime(price_info[0].time, last_check, 900);
+      return;
      }
+
+   double ema21_array[];
+   double ema42_array[];
+
+   ArraySetAsSeries(ema21_array,true);
+   ArraySetAsSeries(ema42_array,true);
+
+   int ema21_definition=iMA(_Symbol,_Period,ema1,0,MODE_EMA,PRICE_CLOSE);
+   int ema42_definition=iMA(_Symbol,_Period,ema2,0,MODE_EMA,PRICE_CLOSE);
+
+   CopyBuffer(ema21_definition,0,0,1,ema21_array);
+   CopyBuffer(ema42_definition,0,0,1,ema42_array);
+
+   double ema21_value=NormalizeDouble(ema21_array[0],_Digits);
+   double ema42_value=NormalizeDouble(ema42_array[0],_Digits);
+
+// -- sell analysis
+   bool sell_signal0 = SellSignal(price_info, 0, ema21_value, ema42_value);
+   bool sell_signal1 = SellSignal(price_info, 1, ema21_value, ema42_value);
+   bool sell_signal2 = SellSignal(price_info, 2, ema21_value, ema42_value);
+
+   if(sell_signal0 && !sell_signal1 && sell_signal2)
+      position = 0;
+
+// -- buy analysis
+   bool buy_signal0 = BuySignal(price_info, 0, ema21_value, ema42_value);
+   bool buy_signal1 = BuySignal(price_info, 1, ema21_value, ema42_value);
+   bool buy_signal2 = BuySignal(price_info, 2, ema21_value, ema42_value);
+
+   if(buy_signal0 && !buy_signal1 && !buy_signal2)
+      position = 1;
+
   }
 //+------------------------------------------------------------------+
-bool SellSignal(MqlRates &price_info[], int price_index, double ema21, double ema42, double md)
+bool SellSignal(MqlRates &price_info[], int price_index, double ema21, double ema42)
   {
    MqlRates first_price    = price_info[price_index++];
    MqlRates second_price   = price_info[price_index++];
@@ -182,18 +169,23 @@ bool SellSignal(MqlRates &price_info[], int price_index, double ema21, double em
       // fechamento quinta vela menor que media de 21
       // fechamento quart vela menor que media de 21
       // fechamento terceira vela menor que media de 21
-      if(third_price.open < ema21 && third_price.open > md)
+      if(third_price.open < ema21 && second_price.close < ema42 )
         {
          // fechamento da vela anterior menor que media de 21?
          // fechamento da vela anterior menor que media de 42?
          // maxima da vela anterior tocou na media de 21?
-         if(second_price.close < ema21 && second_price.close < ema42 && second_price.high > ema21)
+         if(second_price.close < ema21 && second_price.high > ema21)
            {
             // abertura da vela atual menor que meida de 21?
             // vela atual perdeu a minima da vela anterior?
-            if(first_price.open < ema21 && first_price.open < md && first_price.close < second_price.low)
+            if(first_price.open < ema21 && first_price.close < second_price.low)
               {
-               return true;
+               double p1=NormalizeDouble(first_price.close,_Digits);
+               double p2=NormalizeDouble(second_price.low,_Digits);
+               double points=NormalizeDouble(MathAbs(p1-p2) / _Point, _Digits);
+
+               if(points >= 50)
+                  return true;
               }
            }
         }
@@ -205,7 +197,7 @@ bool SellSignal(MqlRates &price_info[], int price_index, double ema21, double em
 //+------------------------------------------------------------------+
 //|                                                                  |
 //+------------------------------------------------------------------+
-bool BuySignal(MqlRates &price_info[], int price_index, double ema21, double ema42, double md)
+bool BuySignal(MqlRates &price_info[], int price_index, double ema21, double ema42)
   {
    MqlRates first_price    = price_info[price_index++];
    MqlRates second_price   = price_info[price_index++];
@@ -219,18 +211,23 @@ bool BuySignal(MqlRates &price_info[], int price_index, double ema21, double ema
       // fechamento quinta vela menor que media de 21
       // fechamento quart vela menor que media de 21
       // fechamento terceira vela menor que media de 21
-      if(third_price.open > ema21 && third_price.open > md)
+      if(third_price.open > ema21 && second_price.close > ema42)
         {
          // fechamento da vela anterior menor que media de 21?
          // fechamento da vela anterior menor que media de 42?
          // maxima da vela anterior tocou na media de 21?
-         if(second_price.close > ema21 && second_price.close > ema42 && second_price.low < ema21)
+         if(second_price.close > ema21 && second_price.low < ema21)
            {
             // abertura da vela atual menor que meida de 21?
             // vela atual perdeu a minima da vela anterior?
-            if(first_price.open > ema21 && first_price.open > md && first_price.close > second_price.high)
+            if(first_price.open > ema21 && first_price.close > second_price.high)
               {
-               return true;
+               double p1=NormalizeDouble(first_price.close,_Digits);
+               double p2=NormalizeDouble(second_price.high,_Digits);
+               double points=NormalizeDouble(MathAbs(p1-p2) / _Point, _Digits);
+
+               if(points >= 50)
+                  return true;
               }
            }
         }
@@ -238,43 +235,11 @@ bool BuySignal(MqlRates &price_info[], int price_index, double ema21, double ema
 
    return false;
   }
-//+------------------------------------------------------------------+
-void CheckTrailingStop(double ask, double bid)
-  {
-   int positions = PositionsTotal()-1;
-
-   for(int i=positions; i>=0; i--)
-     {
-      string symbol = PositionGetSymbol(i);
-
-      if(symbol == _Symbol)
-        {
-         ulong position_ticket      = PositionGetInteger(POSITION_TICKET);
-         double profit              = PositionGetDouble(POSITION_PROFIT);
-         double open_price          = PositionGetDouble(POSITION_PRICE_OPEN);
-         double current_price       = PositionGetDouble(POSITION_PRICE_CURRENT);
-         double current_stop_loss   = PositionGetDouble(POSITION_SL);
-         double current_stop_gain   = PositionGetDouble(POSITION_TP);
-         int points                 = current_price-open_price;
-         int resto                  = points % 100;
-
-         if(resto == 0 && points > 0 && profit > 0)
-           {
-            trade.PositionModify(position_ticket, (open_price+50*_Point), current_stop_gain);
-           }
-
-         if(resto == 0 && points < 0 && profit > 0)
-           {
-            trade.PositionModify(position_ticket, (open_price-50*_Point), current_stop_gain);
-           }
-        }
-     }
-  }
 
 //+------------------------------------------------------------------+
 //|                                                                  |
 //+------------------------------------------------------------------+
-void PutLossAtEntracePrice()
+void PlaceLossAtEntracePrice()
   {
    int positions = PositionsTotal()-1;
 
@@ -304,75 +269,36 @@ void PutLossAtEntracePrice()
      }
   }
 //+------------------------------------------------------------------+
-bool StopLimitReached()
-  {
-   HistorySelect(0,TimeCurrent());
 
-   uint total = HistoryDealsTotal();
-   int ticket = 0;
-   int total_loss = 0;
-
-   CDateTime current_time;
-   CDateTime trade_date;
-   datetime time;
-   double profit;
-
-// inicializa o current_time
-   current_time.DateTime(TimeCurrent());
-
-   for(uint i=0; i<total; i++)
-     {
-      ticket=HistoryDealGetTicket(i);
-
-      if(ticket > 0)
-        {
-         time = (datetime) HistoryDealGetInteger(ticket, DEAL_TIME);
-         profit = HistoryDealGetDouble(ticket, DEAL_PROFIT);
-         trade_date.DateTime(time);
-
-         if(current_time.day_of_year == trade_date.day_of_year)
-           {
-            if(profit < 0)
-               total_loss++;
-           }
-        }
-
-     }
-
-   return total_loss >= loss_limit;
-  }
 //+------------------------------------------------------------------+
-bool HasOpenedOrders()
-  {
-   PositionSelect(_Symbol);
-   string comment = PositionGetString(POSITION_COMMENT);
-
-   if(comment == BUY_COMMENT || comment == SELL_COMMENT)
-      return true;
-
-   return false;
-  }
+//|                                                                  |
 //+------------------------------------------------------------------+
 bool CheckClosePosition(MqlRates &price_info[])
   {
-   MqlRates current_price = price_info[0];
+   double ema21_array[];
+   double ema42_array[];
 
-   double md_array[];
+   ArraySetAsSeries(ema21_array,true);
+   ArraySetAsSeries(ema42_array,true);
 
-   ArraySetAsSeries(md_array,true);
+   int ema21_definition=iMA(_Symbol,_Period,ema1,0,MODE_EMA,PRICE_CLOSE);
+   int ema42_definition=iMA(_Symbol,_Period,ema2,0,MODE_EMA,PRICE_CLOSE);
 
-   int md_definition=iCustom(_Symbol,_Period,"Market\\McGinley_Dynamic",20);
+   CopyBuffer(ema21_definition,0,0,1,ema21_array);
+   CopyBuffer(ema42_definition,0,0,1,ema42_array);
 
-   CopyBuffer(md_definition,0,0,1,md_array);
+   double ema21_value=NormalizeDouble(ema21_array[0],_Digits);
+   double ema42_value=NormalizeDouble(ema42_array[0],_Digits);
 
-   double md_value=NormalizeDouble(md_array[0],_Digits);
+   MqlRates first_price = price_info[0];
+   MqlRates second_price = price_info[1];
 
    if(last_position != -1)
      {
       // buy position
       if(last_position == 1)
         {
-         if(current_price.close < md_value)
+         if(second_price.close < ema21_value && second_price.close < ema42_value)
            {
             return true;
            }
@@ -381,7 +307,7 @@ bool CheckClosePosition(MqlRates &price_info[])
       // sell position
       if(last_position == 0)
         {
-         if(current_price.close > md_value)
+         if(second_price.close > ema21_value && second_price.close > ema42_value)
            {
             return true;
            }
@@ -390,16 +316,18 @@ bool CheckClosePosition(MqlRates &price_info[])
 
    return false;
   }
+
 //+------------------------------------------------------------------+
-void ClosePositions()
+//|                                                                  |
+//+------------------------------------------------------------------+
+bool LossLimitReached()
   {
-   for(int i=PositionsTotal()-1; i>=0; i--)
-     {
-      int ticket = PositionGetTicket(i);
-
-      string comment = PositionGetString(POSITION_COMMENT);
-
-      if(comment == BUY_COMMENT || comment == SELL_COMMENT)
-         trade.PositionClose(ticket);
-     }
+   return total_loss >= loss_limit;
   }
+//+------------------------------------------------------------------+
+void OnTrade()
+  {
+   total_loss = StopLossAnalysis(COMMENT);
+  }
+//+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
