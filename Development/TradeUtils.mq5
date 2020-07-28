@@ -296,7 +296,7 @@ void PlaceLossAtEntracePrice()
 //+------------------------------------------------------------------+
 //|                                                                  |
 //+------------------------------------------------------------------+
-int GetTradingRange(int period, bool show_lines)
+int GetTradingRange(int period, bool show_lines=false)
   {
    int highest_candle, lowest_candle;
    double high[], low[];

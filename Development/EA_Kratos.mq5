@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//|                                                     Paula_V3.mq5 |
+//|                                                       Kratos.mq5 |
 //|                        Copyright 2020, MetaQuotes Software Corp. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
@@ -19,11 +19,12 @@ enum OPERATION {
 input const OPERATION operation;
 input const int gain_rating = 100;
 input const int loss_rating = 100;
-input const int contracts_number = 1;
-input const double max_loss_allowed = 20.0;
+input const double contracts_number = 1;
+input const int trading_range = 50;
+input const int trading_period = 10;
+input const int max_loss_allowed = 3;
 
 // static and consts
-static bool should_close_on_middle_band = false;
 static bool max_loss_reached = false;
 static double day_gain = 0.0;
 static double day_loss = 0.0;
@@ -31,7 +32,7 @@ static datetime last_deal = TimeCurrent();
 static string last_position = "";
 static const string START_TRADE_TIME = "09:30:00";
 static const string END_TRADE_TIME = "17:30:00";
-static const string COMMENT = "PAULA";
+static const string COMMENT = "KRATOS";
 
 //+------------------------------------------------------------------+
 //|                                                                  |
@@ -47,7 +48,7 @@ int OnInit()
 void OnTick()
   {
    BuildDisplay();
-
+   
    if(PositionsTotal() == 0)
      {
       string position = ShouldPlacePosition();
@@ -61,14 +62,13 @@ void OnTick()
    else
      {
       PlaceLossAtEntracePrice();
-
+      
       bool should_close_position = ShouldClosePosition();
 
       if(should_close_position)
         {
          ClosePositions(contracts_number, COMMENT);
          last_position = "";
-         should_close_on_middle_band = false;
         }
      }
   }
@@ -79,31 +79,31 @@ void OnTick()
 string ShouldPlacePosition()
   {
    MqlRates prices[];
-   GetPrices(prices,3);
+   GetPrices(prices,10);
 
    if(!IsTradingTime(START_TRADE_TIME, END_TRADE_TIME))
       return "";
-
+      
+   if(last_deal > TimeCurrent())
+      return "";
+      
+   int current_trading_range = GetTradingRange(trading_period);
+   if(current_trading_range < trading_range)
+      return "";
+      
    max_loss_reached = ShouldStopToTrade() >= max_loss_allowed;
    if(max_loss_reached)
       return "";
 
-   if(last_deal > TimeCurrent())
-      return "";
-
-   bool sell = SellAnalysis(prices);
-   if(sell)
-     {
-      should_close_on_middle_band = ShouldStopOnMiddleBand(prices);
+   bool sell_condition1 = SellAnalysis(prices, 0);
+   bool sell_condition2 = SellAnalysis(prices, 1);
+   if(sell_condition1 && !sell_condition2)
       return "sell";
-     }
 
-   bool buy = BuyAnalysis(prices);
-   if(buy)
-     {
-      should_close_on_middle_band = ShouldStopOnMiddleBand(prices);
+   bool buy_condition1 = BuyAnalysis(prices, 0);
+   bool buy_condition2 = BuyAnalysis(prices, 1);
+   if(buy_condition1 && !buy_condition2)
       return "buy";
-     }
 
    return "";
   }
@@ -111,23 +111,28 @@ string ShouldPlacePosition()
 //+------------------------------------------------------------------+
 //|                                                                  |
 //+------------------------------------------------------------------+
-bool SellAnalysis(MqlRates &prices[])
+bool SellAnalysis(MqlRates &prices[], int index)
   {
-   MqlRates first = prices[0];
-   MqlRates second = prices[1];
-   MqlRates third = prices[2];
+   MqlRates price1 = prices[index];
+   MqlRates price2 = prices[index+1];
+   MqlRates price3 = prices[index+2];
 
-   double lower[], middle[], upper[];
-   GetBollingerBandsValues(lower, middle, upper, 20, 3);
+   double ema21[], ema42[];
+   GetEmaValues(ema21, 5, 3);
+   GetEmaValues(ema42, 21, 3);
 
-   double points = NormalizeDouble(MathAbs(first.close-second.low),_Digits);
+   double points = NormalizeDouble(MathAbs(price1.close-price2.low),_Digits);
    double operation_points = operation == INDICE ? (30*_Point) : (3000*_Point);
 
-   bool result = third.close > upper[2] &&
-                 second.close < upper[1] &&
-                 first.close < upper[0] &&
-                 first.close > middle[0] &&
-                 first.close < second.low &&
+   bool result = ema21[0] < ema42[0] &&
+                 price3.open < ema21[2] &&
+                 price3.open < ema42[2] &&
+                 price2.close < ema21[1] &&
+                 price2.close < ema42[1] &&
+                 price2.high > ema21[1] &&
+                 price1.close < ema21[0] &&
+                 price1.close < ema42[0] &&
+                 price1.close < price2.low &&
                  points > operation_points;
 
    return result;
@@ -137,23 +142,28 @@ bool SellAnalysis(MqlRates &prices[])
 //+------------------------------------------------------------------+
 //|                                                                  |
 //+------------------------------------------------------------------+
-bool BuyAnalysis(MqlRates &prices[])
+bool BuyAnalysis(MqlRates &prices[], int index)
   {
-   MqlRates first = prices[0];
-   MqlRates second = prices[1];
-   MqlRates third = prices[2];
+   MqlRates price1 = prices[0];
+   MqlRates price2 = prices[1];
+   MqlRates price3 = prices[2];
 
-   double lower[], middle[], upper[];
-   GetBollingerBandsValues(lower, middle, upper, 20, 3);
+   double ema21[], ema42[];
+   GetEmaValues(ema21, 5, 3);
+   GetEmaValues(ema42, 21, 3);
 
-   double points = NormalizeDouble(MathAbs(first.close-second.high),_Digits);
+   double points = NormalizeDouble(MathAbs(price1.close-price2.low)/_Point,_Digits);
    double operation_points = operation == INDICE ? (30*_Point) : (3000*_Point);
 
-   bool result = third.close < lower[2] &&
-                 second.close > lower[1] &&
-                 first.close > lower[0] &&
-                 first.close < middle[0] &&
-                 first.close > second.high &&
+   bool result = ema21[0] > ema42[0] &&
+                 price3.open > ema21[2] &&
+                 price3.open > ema42[2] &&
+                 price2.close > ema21[1] &&
+                 price2.close > ema42[1] &&
+                 price2.low < ema21[1] &&
+                 price1.close > ema21[0] &&
+                 price1.close > ema42[0] &&
+                 price1.close > price2.high &&
                  points > operation_points;
 
    return result;
@@ -192,55 +202,19 @@ bool ShouldClosePosition()
    MqlRates prices[];
    GetPrices(prices,2);
 
-   double lower[], middle[], upper[];
-   GetBollingerBandsValues(lower, middle, upper, 20, 1);
+   double ema21[], ema42[];
+   GetEmaValues(ema21, 5, 3);
+   GetEmaValues(ema42, 21, 3);
 
    if(last_position == "buy")
-     {
-      // -- profit
-      if(should_close_on_middle_band)
-         if(prices[0].close > middle[0])
-            return true;
-
-      // -- profit
-      if(prices[0].close > upper[0])
+      if(prices[1].close < ema21[1] && prices[1].close < ema42[1])
          return true;
-      // -- loss
-      if(prices[1].close < lower[0])
-         return true;
-     }
 
    if(last_position == "sell")
-     {
-      // -- profit
-      if(should_close_on_middle_band)
-         if(prices[0].close < middle[0])
-            return true;
-
-      // -- profit
-      if(prices[0].close < lower[0])
+     if(prices[1].close > ema21[1] && prices[1].close > ema42[1])
          return true;
-      // -- loss
-      if(prices[1].close > upper[0])
-         return true;
-     }
-
+         
    return false;
-  }
-
-//+------------------------------------------------------------------+
-//|                                                                  |
-//+------------------------------------------------------------------+
-bool ShouldStopOnMiddleBand(MqlRates &price_info[])
-  {
-   MqlRates price = price_info[0];
-
-   double lower[], middle[], upper[];
-   GetBollingerBandsValues(lower, middle, upper, 20, 3);
-
-   double middle_band_distance = NormalizeDouble(MathAbs(price.close-middle[0])/_Point,_Digits);
-
-   return middle_band_distance >= 120;
   }
 
 //+------------------------------------------------------------------+
